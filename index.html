@@ -585,7 +585,52 @@
             </div>
         </div>
     </div>
-    <script src="app.js?v=2.0.1"></script>
+    <script src="app.js?v=2.0.3"></script>
+
+    <!-- Safety patch: intercept Python code written to Pyodide FS and strip
+         "except ImportError:" lines that a now-removed preprocessing regex in
+         older cached app.js versions incorrectly injected. This ensures even a
+         cached (stale) app.js cannot corrupt user programs. -->
+    <script>
+        (function () {
+            const stripInjectedExcept = function (content) {
+                return content.replace(/^(\s*)except ImportError:\s*$/gm,
+                    '$1pass  # stripped injected except ImportError');
+            };
+
+            // Hook 1: wrap runFile to strip injected except from the source
+            // before the old regex has a chance to re-corrupt it.
+            const patchRunFile = setInterval(() => {
+                if (typeof window.runFile !== 'function') return;
+                clearInterval(patchRunFile);
+                const _orig = window.runFile;
+                window.runFile = async function (targetFile) {
+                    if (window.files && window.files[targetFile] &&
+                        typeof window.files[targetFile] === 'string') {
+                        window.files[targetFile] = stripInjectedExcept(
+                            window.files[targetFile]);
+                    }
+                    return _orig.call(window, targetFile);
+                };
+            }, 100);
+
+            // Hook 2: intercept FS.writeFile for .py files (catches corruption
+            // that happens inside runFile after Hook 1 cleans the source).
+            const patchFS = setInterval(() => {
+                const py = window.pyodideInstance;
+                if (!py || !py.FS || !py.FS.writeFile) return;
+                clearInterval(patchFS);
+                const _writeFile = py.FS.writeFile.bind(py.FS);
+                py.FS.writeFile = function (path, content) {
+                    if (typeof path === 'string' && path.endsWith('.py') &&
+                        typeof content === 'string') {
+                        content = stripInjectedExcept(content);
+                    }
+                    return _writeFile(path, content);
+                };
+            }, 200);
+        })();
+    </script>
 </body>
 
 </html>

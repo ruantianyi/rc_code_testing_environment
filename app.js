@@ -1,6 +1,6 @@
 // IDE State
 let editor = null;
-let pyodideInstance = null;
+var pyodideInstance = null;
 let isPythonReady = false;
 let currentFile = 'demo.py';
 let activeRacecar = null;
@@ -37,7 +37,7 @@ rc.go()
 `
 };
 
-let files;
+var files;
 try {
     const savedFiles = localStorage.getItem('racecar_files');
     files = savedFiles ? JSON.parse(savedFiles) : defaultFiles;
@@ -168,8 +168,22 @@ const neutralizeUnityPreventDefault = (e) => {
     // internally.  If we replace preventDefault with a no-op on Monaco's
     // textarea, the browser's native handler ALSO fires, so one Backspace press
     // deletes two characters (Monaco deletes one, the browser deletes another).
-    // Therefore we skip neutralization for any element inside the #editor div.
-    if (target.closest && target.closest('#editor')) return;
+    //
+    // The solution:
+    // - For standard <input> elements inside #editor (e.g., Monaco's Find
+    //   widget, which are actual INPUT tags): neutralize ALL event types so
+    //   both character typing (keypress) and backspace/delete (keydown) work.
+    // - For Monaco's own internal <textarea>: only neutralize keypress, because
+    //   Monaco itself calls preventDefault() on keydown (e.g., for Backspace)
+    //   to suppress the browser's native textarea handler. Replacing it with a
+    //   no-op causes double-character deletion.
+    if (target.closest && target.closest('#editor')) {
+        const isStandardInput = target.tagName === 'INPUT';
+        if (isStandardInput || e.type === 'keypress') {
+            e.preventDefault = () => { };
+        }
+        return;
+    }
 
     const isInput = target.tagName === 'INPUT' ||
         target.tagName === 'TEXTAREA' ||
@@ -1347,15 +1361,7 @@ async function runFile(targetFile) {
         // --- Preprocess user code for Pyodide compatibility ---
         let userCode = files[targetFile];
 
-        // Fix 1: "try: ... else:" without an except clause is a SyntaxError in Python.
-        // Replace bare "try...else:" with "try...except ImportError:" so path-fallback
-        // patterns like the RACECAR lab template work correctly in the browser.
-        userCode = userCode.replace(
-            /^(\s*try\s*:.+?)^(\s*)else\s*:/gms,
-            '$1$2except ImportError:'
-        );
-
-        // Fix 2: Neutralize sys.path.insert calls that reference relative library paths
+        // Neutralize sys.path.insert calls that reference relative library paths
         // (../library, ../../library) — racecar_core is already at /home/pyodide.
         userCode = userCode.replace(
             /sys\.path\.insert\s*\(\s*\d+\s*,\s*['"][^'"]*library[^'"]*['"]\s*\)/g,
