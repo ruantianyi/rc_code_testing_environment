@@ -411,6 +411,14 @@ class Racecar:
             pass
 
     def get_delta_time(self):
+        # Return the actual elapsed time since the previous Unity update frame,
+        # falling back to 1/60 s before the JS bridge reports a real delta.
+        try:
+            dt = js.window._rc_deltaTime
+            if dt:
+                return float(dt)
+        except Exception:
+            pass
         return 1.0 / 60.0
 
     def go(self):
