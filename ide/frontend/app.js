@@ -1076,6 +1076,12 @@ class Racecar:
             pass
 
     def get_delta_time(self):
+        try:
+            dt = js.window._rc_deltaTime
+            if dt:
+                return float(dt)
+        except Exception:
+            pass
         return 1.0 / 60.0
 
     def go(self):
@@ -2455,11 +2461,13 @@ windows.forEach(win => {
             function stopResize() {
                 document.removeEventListener('mousemove', doResize);
                 document.removeEventListener('mouseup', stopResize);
+                window.removeEventListener('blur', stopResize);
                 saveWindowStates();
             }
 
             document.addEventListener('mousemove', doResize);
             document.addEventListener('mouseup', stopResize);
+            window.addEventListener('blur', stopResize);
         });
     });
 
@@ -2540,6 +2548,7 @@ windows.forEach(win => {
             function stopDrag() {
                 document.removeEventListener('mousemove', doDrag);
                 document.removeEventListener('mouseup', stopDrag);
+                window.removeEventListener('blur', stopDrag);
 
                 const pendingSnap = win.dataset.pendingSnap;
                 if (pendingSnap && typeof applySnapLayout === 'function') {
@@ -2554,6 +2563,7 @@ windows.forEach(win => {
 
             document.addEventListener('mousemove', doDrag);
             document.addEventListener('mouseup', stopDrag);
+            window.addEventListener('blur', stopDrag);
         });
     }
 
