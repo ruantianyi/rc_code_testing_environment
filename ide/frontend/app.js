@@ -799,18 +799,48 @@ async function initPyodide() {
         let coreCode = "";
         let utilsCode = "";
         try {
-            const coreResponse = await fetch('racecar_core.py?v=2.0.7');
+            const coreResponse = await fetch('racecar_core.py?v=2.0.10');
             if (!coreResponse.ok) throw new Error("HTTP error");
             coreCode = await coreResponse.text();
 
-            const utilsResponse = await fetch('racecar_utils.py?v=2.0.7');
+            const utilsResponse = await fetch('racecar_utils.py?v=2.0.10');
             if (!utilsResponse.ok) throw new Error("HTTP error");
             utilsCode = await utilsResponse.text();
         } catch (e) {
             terminalEl.textContent += "Using embedded racecar libraries (local fallback)...\n";
             coreCode = `import js
 import numpy as np
+from enum import IntEnum
 from pyodide.ffi import create_proxy
+
+# Embedded fallback copy of racecar_core.py (used only if the fetch above
+# fails, e.g. when opened over file://). Keep in sync with racecar_core.py.
+# Sensor payloads are exposed as `data`, NOT `to_py` (which collides with
+# Pyodide's JsProxy.to_py() method).
+
+def _js_to_python(raw):
+    if raw is None:
+        return None
+    try:
+        if hasattr(raw, "to_py"):
+            return raw.to_py()
+    except Exception:
+        pass
+    return raw
+
+def _to_array(raw, dtype):
+    py = _js_to_python(raw)
+    if py is None:
+        return None
+    if isinstance(py, dict):
+        py = list(py.values())
+    try:
+        return np.asarray(py, dtype=dtype)
+    except Exception:
+        try:
+            return np.frombuffer(bytes(py), dtype=dtype)
+        except Exception:
+            return None
 
 class Drive:
     def set_speed_angle(self, speed, angle):
@@ -821,74 +851,123 @@ class Drive:
         js.window.unitySetMaxSpeed(max_speed)
 
 class Lidar:
+    def _samples(self):
+        try:
+            if not hasattr(js.window, "racecarState"): return None
+            state = js.window.racecarState
+            if not hasattr(state, "lidar"): return None
+            return _to_array(state.lidar.data, np.float32)
+        except Exception:
+            return None
     def get_samples(self):
-        if not hasattr(js.window, "racecarState") or not hasattr(js.window.racecarState, "lidar"):
+        samples = self._samples()
+        if samples is None or samples.size == 0:
             return np.zeros(360, dtype=np.float32)
-        return np.asarray(js.window.racecarState.lidar.to_py(), dtype=np.float32)
+        return samples
     def get_num_samples(self):
+        samples = self._samples()
+        if samples is not None and samples.size > 0:
+            return int(samples.size)
         return 360
+    def get_samples_async(self):
+        return self.get_samples()
 
 class Camera:
+    def _dims(self):
+        w, h = 640, 480
+        try:
+            if not hasattr(js.window, "racecarState"): return w, h
+            state = js.window.racecarState
+            if not hasattr(state, "camera"): return w, h
+            cam = state.camera
+            w = int(cam.w); h = int(cam.h)
+        except Exception:
+            pass
+        return w, h
+    def _color_data(self):
+        try:
+            if not hasattr(js.window, "racecarState"): return None
+            state = js.window.racecarState
+            if not hasattr(state, "camera"): return None
+            return _to_array(state.camera.data, np.uint8)
+        except Exception:
+            return None
     def get_color_image(self):
-        if not hasattr(js.window, "racecarState") or not hasattr(js.window.racecarState, "camera"):
-            return np.zeros((480, 640, 3), dtype=np.uint8)
-        cam = js.window.racecarState.camera
-        raw = cam.to_py()
-        # Unity may marshal camera bytes as a plain JS object (dict keyed by
-        # integer index) instead of a Uint8Array depending on its WebGL bridge
-        # version. np.asarray() chokes on dict, so flatten to a list first.
-        if isinstance(raw, dict):
-            raw = list(raw.values())
-        arr = np.asarray(raw, dtype=np.uint8)
-        arr = arr.reshape((cam.h, cam.w, 4))
-        bgr = np.empty((cam.h, cam.w, 3), dtype=np.uint8)
+        w, h = self._dims()
+        arr = self._color_data()
+        if arr is None or arr.size != h * w * 4:
+            return np.zeros((h, w, 3), dtype=np.uint8)
+        arr = arr.reshape((h, w, 4))
+        bgr = np.empty((h, w, 3), dtype=np.uint8)
         bgr[..., 0] = arr[..., 2]
         bgr[..., 1] = arr[..., 1]
         bgr[..., 2] = arr[..., 0]
         return bgr
+    def get_color_image_no_copy(self):
+        return self.get_color_image()
+    def get_color_image_async(self):
+        return self.get_color_image()
+    def get_depth_image(self):
+        w, h = self._dims()
+        return np.zeros((h, w), dtype=np.float32)
+    def get_depth_image_async(self):
+        return self.get_depth_image()
     def get_width(self):
-        return 640
+        return self._dims()[0]
     def get_height(self):
-        return 480
+        return self._dims()[1]
+    def get_max_range(self):
+        return 1000.0
 
 class Physics:
     def get_linear_acceleration(self):
-        if not hasattr(js.window, "racecarState"): return (0.0, 0.0, 0.0)
-        if not hasattr(js.window.racecarState, "accel"): return (0.0, 0.0, 0.0)
         try:
-            return tuple(js.window.racecarState.accel.to_py())
+            if not hasattr(js.window, "racecarState"): return (0.0, 0.0, 0.0)
+            state = js.window.racecarState
+            if not hasattr(state, "accel"): return (0.0, 0.0, 0.0)
+            arr = _to_array(state.accel.data, np.float32)
         except Exception:
             return (0.0, 0.0, 0.0)
+        if arr is None or arr.size < 3: return (0.0, 0.0, 0.0)
+        return (float(arr[0]), float(arr[1]), float(arr[2]))
     def get_angular_velocity(self):
-        if not hasattr(js.window, "racecarState"): return (0.0, 0.0, 0.0)
-        if not hasattr(js.window.racecarState, "gyro"): return (0.0, 0.0, 0.0)
         try:
-            return tuple(js.window.racecarState.gyro.to_py())
+            if not hasattr(js.window, "racecarState"): return (0.0, 0.0, 0.0)
+            state = js.window.racecarState
+            if not hasattr(state, "gyro"): return (0.0, 0.0, 0.0)
+            arr = _to_array(state.gyro.data, np.float32)
         except Exception:
             return (0.0, 0.0, 0.0)
+        if arr is None or arr.size < 3: return (0.0, 0.0, 0.0)
+        return (float(arr[0]), float(arr[1]), float(arr[2]))
 
 class Controller:
-    class Button:
+    class Button(IntEnum):
         A = 0
         B = 1
         X = 2
         Y = 3
         LB = 4
         RB = 5
-        LEFT_JOYSTICK = 6
-        RIGHT_JOYSTICK = 7
+        LJOY = 6
+        RJOY = 7
         START = 8
         BACK = 9
-    class Trigger:
+        LEFT_JOYSTICK = 6
+        RIGHT_JOYSTICK = 7
+    class Trigger(IntEnum):
         LEFT = 0
         RIGHT = 1
-    class Joystick:
+    class Joystick(IntEnum):
         LEFT = 0
         RIGHT = 1
     def _ctrl(self):
-        if not hasattr(js.window, "racecarState"): return None
-        c = js.window.racecarState
-        return c.controller if hasattr(c, "controller") else None
+        try:
+            if not hasattr(js.window, "racecarState"): return None
+            c = js.window.racecarState
+            return c.controller if hasattr(c, "controller") else None
+        except Exception:
+            return None
     def is_down(self, button):
         c = self._ctrl()
         return bool(c and (c.down & (1 << int(button))))
@@ -908,9 +987,45 @@ class Controller:
         return (c.jlx, c.jly) if int(joystick) == 0 else (c.jrx, c.jry)
 
 class Display:
+    def __init__(self):
+        self._matrix = np.zeros((8, 24), dtype=np.uint8)
+    def create_window(self):
+        pass
     def show_image(self, image):
         pass
     def show_color_image(self, image):
+        pass
+    def show_depth_image(self, image, max_depth=1000, points=None):
+        pass
+    def show_lidar(self, samples, radius=128, max_range=1000, highlighted_samples=None):
+        pass
+    def get_matrix(self):
+        return self._matrix
+    def new_matrix(self):
+        return np.zeros((8, 24), dtype=np.uint8)
+    def set_matrix(self, matrix):
+        arr = np.asarray(matrix, dtype=np.uint8)
+        if arr.size == 8 * 24:
+            self._matrix = arr.reshape(8, 24)
+    def set_matrix_intensity(self, intensity):
+        pass
+    def show_text(self, text, scroll_speed=2.0):
+        pass
+
+class Telemetry:
+    def __init__(self):
+        self._names = None
+        self._data = []
+    def declare_variables(self, *names):
+        if self._names is not None: return
+        self._names = list(names)
+    def record(self, *values):
+        if self._names is None:
+            raise RuntimeError("Telemetry.record() called before declare_variables().")
+        if len(values) != len(self._names):
+            raise ValueError("Telemetry.record() value count mismatch.")
+        self._data.append(tuple(values))
+    def visualize(self):
         pass
 
 class Racecar:
@@ -921,6 +1036,7 @@ class Racecar:
         self.physics = Physics()
         self.controller = Controller()
         self.display = Display()
+        self.telemetry = Telemetry()
         self._update_slow_time = 1.0
 
     def set_start_update(self, start_func, update_func, update_slow_func=None):
@@ -932,7 +1048,10 @@ class Racecar:
 
     def set_update_slow_time(self, time):
         self._update_slow_time = float(time)
-        js.window._rc_updateSlowTime = self._update_slow_time
+        try:
+            js.window._rc_updateSlowTime = self._update_slow_time
+        except Exception:
+            pass
 
     def get_delta_time(self):
         return 1.0 / 60.0
@@ -940,7 +1059,7 @@ class Racecar:
     def go(self):
         pass
 
-def create_racecar():
+def create_racecar(_isSimulation=None):
     return Racecar()
 `;
             utilsCode = `import racecar_core
@@ -1012,38 +1131,44 @@ initPyodide();
 // --- 4. Unity WebGL & Pyodide Core Bridge ---
 // Pre-initialize racecarState so physics never crashes if controller push arrives first,
 // or if Python reads sensors before Unity's first physics push.
+// NOTE: sensor payloads are exposed as `data`, NOT `to_py`. Pyodide's JsProxy
+// already defines a `.to_py()` method, so a property named `to_py` was shadowed by
+// it and `sensor.to_py()` in Python converted the *whole* sensor object (including
+// the JS accessor function, as a JsProxy) into a dict — which numpy then could not
+// cast. Naming the payload `data` avoids the collision entirely.
 window.racecarState = window.racecarState || {};
-window.racecarState.accel = window.racecarState.accel || { to_py: () => [0, 0, 0] };
-window.racecarState.gyro = window.racecarState.gyro || { to_py: () => [0, 0, 0] };
+window.racecarState.accel = window.racecarState.accel || { data: [0, 0, 0] };
+window.racecarState.gyro = window.racecarState.gyro || { data: [0, 0, 0] };
 
 window.unityPushState = function (ax, ay, az, gx, gy, gz) {
     window.racecarState = window.racecarState || {};
-    window.racecarState.accel = { to_py: () => [ax, ay, az] };
-    window.racecarState.gyro = { to_py: () => [gx, gy, gz] };
+    window.racecarState.accel = { data: [ax, ay, az] };
+    window.racecarState.gyro = { data: [gx, gy, gz] };
 };
 
 window.unityPushLidar = function (samplesFloat32) {
     window.racecarState = window.racecarState || {};
-    window.racecarState.lidar = { to_py: () => samplesFloat32 };
+    window.racecarState.lidar = { data: samplesFloat32 };
 };
 
 window.unityPushCamera = function (pixelsUint8, w, h) {
     window.racecarState = window.racecarState || {};
-    // Unity may send camera data as a plain JS object (dict) instead of a
-    // Uint8Array, depending on how the C# side marshals the byte array.
-    // Normalize to a flat Uint8Array so np.asarray() can ingest it.
+    // Unity may send camera data as a plain JS object (dict), a raw ArrayBuffer,
+    // or a Uint8Array, depending on how the C# side marshals the byte array.
+    // Normalize all of these to a flat Uint8Array so numpy can ingest it.
     var data = pixelsUint8;
-    if (data && typeof data === 'object' &&
+    if (data instanceof ArrayBuffer) {
+        data = new Uint8Array(data);
+    } else if (data && typeof data === 'object' &&
         !(data instanceof Uint8Array) &&
-        !(data instanceof Uint8ClampedArray) &&
-        !(data instanceof ArrayBuffer)) {
+        !(data instanceof Uint8ClampedArray)) {
         // Object/dict case: convert values to a flat Uint8Array.
         // Object.values() gives us the pixel values in order (assuming
         // Unity marshalled them with sequential numeric keys).
         var vals = Object.values(data);
         data = new Uint8Array(vals);
     }
-    window.racecarState.camera = { to_py: () => data, w: w, h: h };
+    window.racecarState.camera = { data: data, w: w, h: h };
 };
 
 window.unityPushController = function (down, pressed, released, tl, tr, jlx, jly, jrx, jry) {
@@ -1268,8 +1393,13 @@ window.unityToPython = function (bytes) {
         }
     } catch (err) {
         console.error("[Python Loop Error]", err);
+        // Print the traceback ONCE, then halt the loop. Unity keeps invoking
+        // unityToPython at ~60 fps while a level is active, so without stopping
+        // here the same error is re-raised and re-printed every frame, flooding
+        // the terminal until the user manually presses Stop.
         terminalMsg("Python Loop Error: " + (err.message || err), "error");
         sendErrorToUnity(err.message);
+        stopProgram();
     }
 };
 
