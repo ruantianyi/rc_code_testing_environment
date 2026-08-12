@@ -1616,11 +1616,14 @@ if (trayExportBtn) {
     });
 }
 
-// --- Tray Import (All Data & Workspace Package) ---
-const trayImportBtn = document.getElementById('tray-import');
+// --- Workspace Import (All Data & Workspace Package) ---
+// Triggered from the Settings window (Import button) via the hidden file input.
 const trayImportInput = document.getElementById('tray-import-input');
-if (trayImportBtn && trayImportInput) {
-    trayImportBtn.addEventListener('click', () => trayImportInput.click());
+if (trayImportInput) {
+    const settingsImportBtn = document.getElementById('settings-import-btn');
+    if (settingsImportBtn) {
+        settingsImportBtn.addEventListener('click', () => trayImportInput.click());
+    }
     trayImportInput.addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (!file) return;
