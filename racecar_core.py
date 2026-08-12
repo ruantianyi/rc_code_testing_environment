@@ -59,12 +59,18 @@ def _to_array(raw, dtype):
     if isinstance(py, dict):
         py = list(py.values())
     try:
-        return np.asarray(py, dtype=dtype)
+        arr = np.asarray(py, dtype=dtype)
     except Exception:
         try:
-            return np.frombuffer(bytes(py), dtype=dtype)
+            arr = np.frombuffer(bytes(py), dtype=dtype)
         except Exception:
             return None
+    # np.asarray() over a memoryview/bytes buffer can yield a read-only view,
+    # but the physical library returns writable arrays; normalize so user code
+    # that mutates a returned scan/image never hits a read-only error.
+    if not arr.flags.writeable:
+        arr = arr.copy()
+    return arr
 
 
 ################################################################################
