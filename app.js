@@ -835,12 +835,15 @@ def _to_array(raw, dtype):
     if isinstance(py, dict):
         py = list(py.values())
     try:
-        return np.asarray(py, dtype=dtype)
+        arr = np.asarray(py, dtype=dtype)
     except Exception:
         try:
-            return np.frombuffer(bytes(py), dtype=dtype)
+            arr = np.frombuffer(bytes(py), dtype=dtype)
         except Exception:
             return None
+    if not arr.flags.writeable:
+        arr = arr.copy()
+    return arr
 
 class Drive:
     def set_speed_angle(self, speed, angle):
