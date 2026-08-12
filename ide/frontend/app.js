@@ -832,7 +832,13 @@ class Camera:
         if not hasattr(js.window, "racecarState") or not hasattr(js.window.racecarState, "camera"):
             return np.zeros((480, 640, 3), dtype=np.uint8)
         cam = js.window.racecarState.camera
-        arr = np.asarray(cam.to_py(), dtype=np.uint8)
+        raw = cam.to_py()
+        # Unity may marshal camera bytes as a plain JS object (dict keyed by
+        # integer index) instead of a Uint8Array depending on its WebGL bridge
+        # version. np.asarray() chokes on dict, so flatten to a list first.
+        if isinstance(raw, dict):
+            raw = list(raw.values())
+        arr = np.asarray(raw, dtype=np.uint8)
         arr = arr.reshape((cam.h, cam.w, 4))
         bgr = np.empty((cam.h, cam.w, 3), dtype=np.uint8)
         bgr[..., 0] = arr[..., 2]
@@ -1022,7 +1028,21 @@ window.unityPushLidar = function (samplesFloat32) {
 
 window.unityPushCamera = function (pixelsUint8, w, h) {
     window.racecarState = window.racecarState || {};
-    window.racecarState.camera = { to_py: () => pixelsUint8, w: w, h: h };
+    // Unity may send camera data as a plain JS object (dict) instead of a
+    // Uint8Array, depending on how the C# side marshals the byte array.
+    // Normalize to a flat Uint8Array so np.asarray() can ingest it.
+    var data = pixelsUint8;
+    if (data && typeof data === 'object' &&
+        !(data instanceof Uint8Array) &&
+        !(data instanceof Uint8ClampedArray) &&
+        !(data instanceof ArrayBuffer)) {
+        // Object/dict case: convert values to a flat Uint8Array.
+        // Object.values() gives us the pixel values in order (assuming
+        // Unity marshalled them with sequential numeric keys).
+        var vals = Object.values(data);
+        data = new Uint8Array(vals);
+    }
+    window.racecarState.camera = { to_py: () => data, w: w, h: h };
 };
 
 window.unityPushController = function (down, pressed, released, tl, tr, jlx, jly, jrx, jry) {
