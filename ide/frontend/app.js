@@ -798,11 +798,11 @@ async function initPyodide() {
         let coreCode = "";
         let utilsCode = "";
         try {
-            const coreResponse = await fetch('racecar_core.py');
+            const coreResponse = await fetch('racecar_core.py?v=2.0.5');
             if (!coreResponse.ok) throw new Error("HTTP error");
             coreCode = await coreResponse.text();
 
-            const utilsResponse = await fetch('racecar_utils.py');
+            const utilsResponse = await fetch('racecar_utils.py?v=2.0.5');
             if (!utilsResponse.ok) throw new Error("HTTP error");
             utilsCode = await utilsResponse.text();
         } catch (e) {
