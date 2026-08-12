@@ -342,19 +342,21 @@ scan = np.full(360, 100.0, dtype=np.float32)
 scan[0] = 20.0  # obstacle directly ahead
 angle, dist = ru.get_lidar_closest_point(scan, (0, 360))
 check("get_lidar_closest_point", abs(angle - 0.0) < 1.0 and abs(dist - 20.0) < 0.1, f"{angle},{dist}")
+# A 4-degree window around angle 0 covers indices 358,359,0,1,2 => (100+100+20+100+100)/5 = 84.0
 front = ru.get_lidar_average_distance(scan, 0)
-check("get_lidar_average_distance", abs(front - 20.0) < 2.0, str(front))
+check("get_lidar_average_distance", abs(front - 84.0) < 0.5, str(front))
 
-# colored text
-check("format_colored", "\x1b[31m" in ru.format_colored("x", ru.TerminalColor.red))
+# colored text (TerminalColor.red == 91)
+check("format_colored", "\x1b[91m" in ru.format_colored("x", ru.TerminalColor.red))
 ru.print_error("test")  # no raise
 
-# AR markers: generate a 6x6 marker, detect it
+# AR markers: generate a 6x6 marker with a quiet zone, detect it
 try:
     import cv2 as cv
     dict_obj = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_6X6_250)
-    marker_img = cv.aruco.generateImageMarker(dict_obj, 7, 300)
-    marker_img = cv.cvtColor(marker_img, cv.COLOR_GRAY2BGR)
+    marker_gray = cv.aruco.generateImageMarker(dict_obj, 7, 300)
+    marker_gray = cv.copyMakeBorder(marker_gray, 40, 40, 40, 40, cv.BORDER_CONSTANT, value=255)
+    marker_img = cv.cvtColor(marker_gray, cv.COLOR_GRAY2BGR)
     markers = ru.get_ar_markers(marker_img)
     check("get_ar_markers detects", any(m.get_id() == 7 for m in markers), str([m.get_id() for m in markers]))
     ru.draw_ar_markers(marker_img, markers)
