@@ -758,11 +758,12 @@ setTimeout(() => {
     }
 }, 3000);
 
-// Load Unity independently — don't gate it on Monaco editor
-// loadUnity() already guards against double-calls internally
-if (typeof window.loadUnity === "function") {
-    window.loadUnity();
-}
+// Defer Unity WebGL loading: the 74 MB frontend.data competes with
+// Monaco (~10 MB from CDN) and Pyodide (~30 MB from CDN) for bandwidth.
+// We start Unity only after Monaco finishes loading (line ~740), or when
+// the user explicitly opens the Simulator window (taskbar click handler).
+// This way the code editor is ready in a few seconds instead of waiting
+// for a 74 MB download the user may not even need.
 
 // --- 3. Pyodide Integration ---
 async function initPyodide() {
@@ -798,11 +799,11 @@ async function initPyodide() {
         let coreCode = "";
         let utilsCode = "";
         try {
-            const coreResponse = await fetch('racecar_core.py?v=2.0.5');
+            const coreResponse = await fetch('racecar_core.py?v=2.0.7');
             if (!coreResponse.ok) throw new Error("HTTP error");
             coreCode = await coreResponse.text();
 
-            const utilsResponse = await fetch('racecar_utils.py?v=2.0.5');
+            const utilsResponse = await fetch('racecar_utils.py?v=2.0.7');
             if (!utilsResponse.ok) throw new Error("HTTP error");
             utilsCode = await utilsResponse.text();
         } catch (e) {
@@ -1735,14 +1736,9 @@ document.querySelectorAll('.window').forEach(win => {
                 });
             }
         } else if (win.id === 'window-coder') {
-            if (typeof editor !== 'undefined' && editor) {
-                const firstFile = Object.keys(files).find(k => !k.endsWith('/'));
-                currentFile = firstFile || 'demo.py';
-                loadActiveFile();
-                if (typeof terminalEl !== 'undefined' && terminalEl) {
-                    terminalEl.textContent = "Racecar OS Terminal initialized.\n";
-                }
-            }
+            // Just hide — don't reset the file or clear the terminal.
+            // The editor state and terminal history are preserved so
+            // re-opening is instant (just a layout refresh).
         }
     };
 
@@ -1783,12 +1779,37 @@ taskbarIcons.forEach(icon => {
             if (win.id === 'window-simulator' && !window.unityInstance && typeof window.loadUnity === 'function') {
                 window.loadUnity();
             }
+            // Monaco loses layout dimensions when hidden (display:none).
+            // Force immediate recalculation on re-show for instant rendering.
+            if (win.id === 'window-coder' && typeof editor !== 'undefined' && editor && typeof editor.layout === 'function') {
+                editor.layout();
+            }
         } else if (win.classList.contains('minimized')) {
             win.classList.remove('minimized');
             win.style.zIndex = ++highestZIndex;
+            if (win.id === 'window-coder') {
+                // Keep transition:none (set during minimize). If we restore CSS
+                // transitions now, the 0.2s scale(0)→scale(1) animation causes
+                // getBoundingClientRect() to return continuously-changing values,
+                // triggering ResizeObserver on every frame — expensive Monaco
+                // re-layouts that make re-opening feel stuck.
+                if (typeof editor !== 'undefined' && editor && typeof editor.layout === 'function') {
+                    editor.layout();
+                }
+                // Restore transitions after layout settles
+                setTimeout(() => { win.style.transition = ''; }, 150);
+            }
         } else {
             // If it's already focused, minimize it. Otherwise, focus it.
             if (parseInt(win.style.zIndex || 0) === highestZIndex) {
+                // Kill CSS transitions during minimize — otherwise Monaco's
+                // ResizeObserver fires on every animation frame of the 0.2s
+                // transform/opacity transition, triggering expensive re-layouts
+                // that make the minimize feel stuck.
+                if (win.id === 'window-coder') {
+                    win.style.transition = 'none';
+                    void win.offsetHeight; // force reflow to apply
+                }
                 win.classList.add('minimized');
             } else {
                 win.style.zIndex = ++highestZIndex;
@@ -2469,6 +2490,9 @@ if (startBtn && startMenu) {
                 ensureTaskbarIcon(targetId);
                 updateTaskbarIcons();
                 saveWindowStates();
+                if (win.id === 'window-coder' && typeof editor !== 'undefined' && editor && typeof editor.layout === 'function') {
+                    editor.layout();
+                }
             }
             startMenu.classList.add('hidden');
             startBtn.classList.remove('active');
@@ -2649,11 +2673,25 @@ function ensureTaskbarIcon(targetId) {
                 win.classList.remove('hidden');
                 win.classList.remove('minimized');
                 win.style.zIndex = ++highestZIndex;
+                if (win.id === 'window-coder' && typeof editor !== 'undefined' && editor && typeof editor.layout === 'function') {
+                    editor.layout();
+                }
             } else if (win.classList.contains('minimized')) {
                 win.classList.remove('minimized');
                 win.style.zIndex = ++highestZIndex;
+                if (win.id === 'window-coder') {
+                    // Keep transition:none from minimize, layout synchronously
+                    if (typeof editor !== 'undefined' && editor && typeof editor.layout === 'function') {
+                        editor.layout();
+                    }
+                    setTimeout(() => { win.style.transition = ''; }, 150);
+                }
             } else {
                 if (parseInt(win.style.zIndex || 0) === highestZIndex) {
+                    if (win.id === 'window-coder') {
+                        win.style.transition = 'none';
+                        void win.offsetHeight;
+                    }
                     win.classList.add('minimized');
                 } else {
                     win.style.zIndex = ++highestZIndex;
