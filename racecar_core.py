@@ -23,9 +23,13 @@ class Camera:
         if not hasattr(js.window, "racecarState") or not hasattr(js.window.racecarState, "camera"):
             return np.zeros((480, 640, 3), dtype=np.uint8)
         cam = js.window.racecarState.camera
-        arr = np.asarray(cam.to_py(), dtype=np.uint8)
-        # Unity's JSPushCamera sends a Uint8Array slice of raw RGBA bytes.
-        # racecarState.camera = { to_py: ()=>Uint8Array, w, h } — no .pixels nesting.
+        raw = cam.to_py()
+        # Unity may marshal camera bytes as a plain JS object (dict keyed by
+        # integer index) instead of a Uint8Array depending on its WebGL bridge
+        # version. np.asarray() chokes on dict, so flatten to a list first.
+        if isinstance(raw, dict):
+            raw = list(raw.values())
+        arr = np.asarray(raw, dtype=np.uint8)
         arr = arr.reshape((cam.h, cam.w, 4))
         # Convert RGBA to BGR for OpenCV
         bgr = np.empty((cam.h, cam.w, 3), dtype=np.uint8)
