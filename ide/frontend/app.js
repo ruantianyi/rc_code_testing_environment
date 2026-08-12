@@ -815,8 +815,8 @@ from pyodide.ffi import create_proxy
 
 # Embedded fallback copy of racecar_core.py (used only if the fetch above
 # fails, e.g. when opened over file://). Keep in sync with racecar_core.py.
-# Sensor payloads are exposed as `data`, NOT `to_py` (which collides with
-# Pyodide's JsProxy.to_py() method).
+# Sensor payloads are exposed as the property "data", NOT "to_py" (which
+# collides with Pyodide's JsProxy.to_py() method).
 
 def _js_to_python(raw):
     if raw is None:
