@@ -792,6 +792,7 @@ def get_closest_pixel(
     depth_image = (depth_image - 0.01) % 10000
 
     # Apply a Gaussian blur to reduce noise
+    blurred_image = depth_image
     if kernel_size > 1:
         blurred_image = cv.GaussianBlur(depth_image, (kernel_size, kernel_size), 0)
 

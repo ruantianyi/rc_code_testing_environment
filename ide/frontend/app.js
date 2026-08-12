@@ -342,6 +342,10 @@ async function createItemPrompt(parentFolder = '') {
         const filename = await CustomDialog.prompt(`Enter new filename (e.g. script.py, data.txt):`);
         if (filename) {
             let name = filename.trim();
+            if (name.includes('/')) {
+                terminalMsg("File names cannot contain '/'. Create folders separately.", "error");
+                return;
+            }
             if (!name.includes('.')) {
                 name += '.py';
             } else {
@@ -353,7 +357,7 @@ async function createItemPrompt(parentFolder = '') {
                 }
             }
             const fullPath = targetParent + name;
-            if (files[fullPath]) {
+            if (Object.prototype.hasOwnProperty.call(files, fullPath)) {
                 terminalMsg('File already exists.', "error");
                 return;
             }
@@ -370,9 +374,13 @@ async function createItemPrompt(parentFolder = '') {
         const folderName = await CustomDialog.prompt(`Enter new folder name:`);
         if (folderName) {
             let name = folderName.trim();
+            if (name.includes('/')) {
+                terminalMsg("Folder names cannot contain '/'. Create each folder separately.", "error");
+                return;
+            }
             if (!name.endsWith('/')) name += '/';
             const fullPath = targetParent + name;
-            if (files[fullPath]) {
+            if (Object.prototype.hasOwnProperty.call(files, fullPath)) {
                 terminalMsg('Folder already exists.', "error");
                 return;
             }
@@ -400,7 +408,7 @@ async function renameFileOrFolder(oldPath) {
 
     if (isFolder) {
         const newFolderPath = parentPath + (cleanName.endsWith('/') ? cleanName : cleanName + '/');
-        if (files[newFolderPath] && newFolderPath !== oldPath) {
+        if (Object.prototype.hasOwnProperty.call(files, newFolderPath) && newFolderPath !== oldPath) {
             terminalMsg(`A folder named '${cleanName}' already exists.`, "error");
             return;
         }
@@ -411,11 +419,15 @@ async function renameFileOrFolder(oldPath) {
             files[targetKey] = files[k];
             delete files[k];
         });
-        if (expandedFolders[oldPath] !== undefined) {
-            expandedFolders[newFolderPath] = expandedFolders[oldPath];
-            delete expandedFolders[oldPath];
-            saveExpandedFolders();
-        }
+        // Migrate collapse state for the folder AND all nested subfolders, so a
+        // rename doesn't orphan expandedFolders keys under the old path.
+        Object.keys(expandedFolders).forEach(k => {
+            if (k === oldPath || k.startsWith(oldPath)) {
+                expandedFolders[newFolderPath + k.slice(oldPath.length)] = expandedFolders[k];
+                delete expandedFolders[k];
+            }
+        });
+        saveExpandedFolders();
         if (currentFile.startsWith(oldPath)) {
             currentFile = newFolderPath + currentFile.slice(oldPath.length);
         }
@@ -431,7 +443,7 @@ async function renameFileOrFolder(oldPath) {
             }
         }
         const targetFile = parentPath + finalFileName;
-        if (files[targetFile] && targetFile !== oldPath) {
+        if (Object.prototype.hasOwnProperty.call(files, targetFile) && targetFile !== oldPath) {
             terminalMsg(`A file named '${finalFileName}' already exists.`, "error");
             return;
         }
@@ -479,9 +491,11 @@ async function deleteFileOrFolder(targetPath) {
             }
         }
     }
-    saveCurrentFile(true);
+    // Load the replacement file into the editor BEFORE saving, so the deleted
+    // file's stale editor content is never written into the replacement file.
     updateFileTree();
     loadActiveFile();
+    saveCurrentFile(true);
 }
 
 function updateFileTree() {
@@ -709,6 +723,11 @@ if (typeof require !== 'undefined') {
         require(['vs/editor/editor.main'], function () {
             monacoLoaded = true;
             const editorDiv = document.getElementById('editor');
+            // If the fallback editor activated first (Monaco finished loading
+            // late), preserve any edits typed into it before replacing it.
+            if (editor && editorDiv && editorDiv.querySelector('#fallback-textarea')) {
+                files[currentFile] = editor.getValue();
+            }
             if (editorDiv) editorDiv.innerHTML = '';
             editor = monaco.editor.create(editorDiv, {
                 value: files[currentFile] || '',
@@ -1375,6 +1394,7 @@ window.unitySetMaxSpeed = function (speed) {
 // is dropped. Keep announcing ourselves (idempotent) until Unity starts driving us.
 let connectHeartbeat = null;
 let slowTimer = 0;
+let lastUnityFrameTime = 0;
 
 window.unityRegisterRacecar = function (racecar) {
     activeRacecar = racecar;
@@ -1417,6 +1437,13 @@ window.unityToPython = function (bytes) {
         clearInterval(connectHeartbeat);
         connectHeartbeat = null;
     }
+
+    // Track the real elapsed time since the previous Unity frame so
+    // rc.get_delta_time() reports actual timing instead of a hardcoded 1/60 s.
+    const now = (typeof performance !== 'undefined' && performance.now)
+        ? performance.now() : Date.now();
+    window._rc_deltaTime = lastUnityFrameTime ? (now - lastUnityFrameTime) / 1000 : (1 / 60);
+    lastUnityFrameTime = now;
 
     try {
         if (header === 2) { // unity_start
@@ -1625,6 +1652,14 @@ if (chooseRunBtn) {
 }
 
 function stopProgram() {
+    // Stop the connect heartbeat so a terminated program doesn't keep announcing
+    // itself to Unity every second (which would otherwise re-enter User Program
+    // mode for an already-stopped program once a level later loads).
+    if (connectHeartbeat !== null) {
+        clearInterval(connectHeartbeat);
+        connectHeartbeat = null;
+    }
+
     // Destroy cached PyProxy callback references
     if (window._rc_startFunc && typeof window._rc_startFunc.destroy === 'function') {
         try { window._rc_startFunc.destroy(); } catch (e) { }
@@ -1935,7 +1970,8 @@ document.querySelectorAll('.window').forEach(win => {
 // Taskbar Logic
 const taskbarIcons = document.querySelectorAll('.taskbar-icon');
 function updateTaskbarIcons() {
-    taskbarIcons.forEach(icon => {
+    // Query live so dynamically-created icons (ensureTaskbarIcon) are included.
+    document.querySelectorAll('.taskbar-icon').forEach(icon => {
         const targetId = icon.dataset.target;
         const win = document.getElementById(targetId);
         if (win && !win.classList.contains('hidden') && !win.classList.contains('minimized')) {
