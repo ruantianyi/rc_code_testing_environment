@@ -1695,6 +1695,184 @@ function stopProgram() {
 
 stopBtn.addEventListener('click', stopProgram);
 
+// --- 5.5 Terminal Shell (cd / ls / pwd / racecar sim) ---
+// A minimal shell over the workspace so users can navigate folders and launch
+// the simulator from the terminal instead of (or in addition to) the buttons.
+let terminalCwd = '';          // '' = workspace root, 'folder/' = inside a folder
+const terminalHistory = [];    // command history for up/down arrow recall
+let terminalHistoryIdx = -1;
+
+const terminalInput = document.getElementById('terminal-input');
+const terminalPromptEl = document.getElementById('terminal-prompt');
+
+function terminalPromptText() {
+    return '~' + (terminalCwd ? '/' + terminalCwd : '') + ' $';
+}
+
+function updateTerminalPrompt() {
+    if (terminalPromptEl) terminalPromptEl.textContent = terminalPromptText();
+}
+
+function terminalPrint(text) {
+    if (!terminalEl) return;
+    terminalEl.textContent += text + '\n';
+    terminalEl.scrollTop = terminalEl.scrollHeight;
+}
+
+// A directory "exists" if any workspace key is at or under that path.
+function terminalDirExists(dir) {
+    return Object.keys(files).some(k => k.startsWith(dir));
+}
+
+// List immediate children of dir (folders first, then files).
+function terminalListDir(dir) {
+    const children = new Set();
+    for (const key of Object.keys(files)) {
+        if (!key.startsWith(dir)) continue;
+        const rest = key.slice(dir.length);
+        if (rest === '') continue;
+        const slash = rest.indexOf('/');
+        children.add(slash === -1 ? rest : rest.slice(0, slash + 1));
+    }
+    return Array.from(children).sort((a, b) => {
+        const af = a.endsWith('/') ? 0 : 1;
+        const bf = b.endsWith('/') ? 0 : 1;
+        if (af !== bf) return af - bf;
+        return a.localeCompare(b);
+    });
+}
+
+function terminalCd(arg) {
+    arg = (arg || '').trim();
+    let target;
+    if (arg === '' || arg === '/' || arg === '~') {
+        target = '';
+    } else if (arg === '..') {
+        const parts = terminalCwd.split('/').filter(p => p !== '');
+        parts.pop();
+        target = parts.length ? parts.join('/') + '/' : '';
+    } else {
+        const name = arg.replace(/^\.\/+/, '').replace(/\/+$/, '');
+        if (name === '' || name === '.') return; // "cd ." is a no-op
+        target = terminalCwd + name + '/';
+    }
+    if (target !== '' && !terminalDirExists(target)) {
+        terminalPrint('cd: no such directory: ' + arg);
+        return;
+    }
+    terminalCwd = target;
+    updateTerminalPrompt();
+}
+
+function terminalRunFile(arg) {
+    if (!isPythonReady) {
+        terminalPrint('Pyodide is still loading. Please wait.');
+        return;
+    }
+    if (window.isPythonRunning) {
+        terminalPrint('A program is already running. Press Stop first.');
+        return;
+    }
+    let p = (arg || '').trim();
+    if (!p) {
+        terminalPrint('Usage: racecar sim <file.py>');
+        return;
+    }
+    if (!p.includes('.')) p += '.py';
+    if (p.startsWith('/')) p = p.slice(1);
+    else p = terminalCwd + p;
+    if (!Object.prototype.hasOwnProperty.call(files, p)) {
+        terminalPrint('No such file: ' + arg);
+        return;
+    }
+    // Preserve any unsaved edits to the currently-open file, then open the target
+    // and launch the simulator (same sequence as clicking a file in the tree).
+    saveCurrentFile();
+    currentFile = p;
+    updateFileTree();
+    loadActiveFile();
+    runFile(p);
+}
+
+function executeTerminalCommand(line) {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    terminalPrint(terminalPromptText() + ' ' + trimmed);
+
+    const tokens = trimmed.split(/\s+/);
+    const cmd = tokens[0].toLowerCase();
+
+    if (cmd === 'help' || cmd === '?') {
+        terminalPrint(
+            'Available commands:\n' +
+            '  cd <folder>          Change directory (cd .. up, cd / for root)\n' +
+            '  ls                   List files in the current directory\n' +
+            '  pwd                  Print the current directory\n' +
+            '  racecar sim <file>   Run a Python file in the simulator\n' +
+            '  run <file>           Alias for "racecar sim <file>"\n' +
+            '  clear                Clear the terminal\n' +
+            '  help                 Show this help'
+        );
+    } else if (cmd === 'clear' || cmd === 'cls') {
+        if (terminalEl) terminalEl.textContent = '';
+    } else if (cmd === 'cd') {
+        terminalCd(tokens[1]);
+    } else if (cmd === 'ls' || cmd === 'dir') {
+        const items = terminalListDir(terminalCwd);
+        terminalPrint(items.length === 0 ? '(empty)' : items.join('   '));
+    } else if (cmd === 'pwd') {
+        terminalPrint(terminalCwd === '' ? '/' : '/' + terminalCwd);
+    } else if (cmd === 'racecar') {
+        if (tokens[1] === 'sim') terminalRunFile(tokens[2]);
+        else terminalPrint('Usage: racecar sim <file.py>');
+    } else if (cmd === 'run') {
+        terminalRunFile(tokens[1]);
+    } else {
+        terminalPrint('command not found: ' + tokens[0] + '  (type "help")');
+    }
+}
+
+if (terminalInput) {
+    terminalInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const cmd = terminalInput.value;
+            terminalInput.value = '';
+            if (cmd.trim()) {
+                terminalHistory.push(cmd);
+                terminalHistoryIdx = terminalHistory.length;
+            }
+            executeTerminalCommand(cmd);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (terminalHistory.length === 0) return;
+            if (terminalHistoryIdx <= 0) terminalHistoryIdx = 0;
+            else terminalHistoryIdx--;
+            terminalInput.value = terminalHistory[terminalHistoryIdx] || '';
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (terminalHistory.length === 0) return;
+            if (terminalHistoryIdx >= terminalHistory.length - 1) {
+                terminalHistoryIdx = terminalHistory.length;
+                terminalInput.value = '';
+            } else {
+                terminalHistoryIdx++;
+                terminalInput.value = terminalHistory[terminalHistoryIdx] || '';
+            }
+        }
+    });
+
+    // Clicking the terminal output focuses the prompt (unless selecting text).
+    if (terminalEl) {
+        terminalEl.addEventListener('click', () => {
+            const sel = window.getSelection ? window.getSelection().toString() : '';
+            if (sel === '') terminalInput.focus();
+        });
+    }
+}
+
+updateTerminalPrompt();
+
 // --- 6. Settings Panel & Desktop Window Management ---
 function setTheme(theme) {
     document.documentElement.setAttribute('data-theme', theme);
