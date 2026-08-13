@@ -505,6 +505,44 @@ pre#terminal {
     color: var(--text-secondary);
 }
 
+.terminal-input-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-base);
+}
+
+.terminal-prompt {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #34d399;
+    white-space: nowrap;
+    user-select: none;
+}
+
+html[data-theme="light"] .terminal-prompt {
+    color: #059669;
+}
+
+.terminal-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    caret-color: var(--accent);
+}
+
+.terminal-input::placeholder {
+    color: var(--text-secondary);
+    opacity: 0.55;
+}
+
 /* --- Simulator Window --- */
 .sim-content {
     background: #000;
